@@ -58,7 +58,7 @@ namespace nanolog
 			//auto const msecs = diff % 1000;
 
 			std::time_t t = std::chrono::system_clock::to_time_t(n);
-			os << '`' << std::put_time(std::localtime(&t), "%Y-%m-%d %H.%M.%S") << "." << diff << '`';
+			os << std::put_time(std::localtime(&t), "%Y-%m-%d %H.%M.%S") << "." << diff << '`';
 		}
 
 		std::thread::id this_thread_id()
