@@ -115,10 +115,9 @@ namespace nanolog
 	class NanoLogLine
 	{
 	public:
-        //LogLevel m_level;
 		typedef std::tuple < char, uint32_t, uint64_t, int32_t, int64_t, double, const char*, char * > SupportedTypes;
 		NanoLogLine(LogLevel level, char const * file, char const * function, uint32_t line) : m_bytes_used(0)
-			, m_buffer_size(sizeof(m_stack_buffer)) //, m_level(level)
+			, m_buffer_size(sizeof(m_stack_buffer))
 		{
 			encode0(timestamp_now(), this_thread_id(), file, function, line, level);
 		}
@@ -673,17 +672,20 @@ namespace nanolog
 	inline std::atomic < NanoLogger * > atomic_nanologger_ads;
 	inline std::atomic < NanoLogger * > atomic_nanologger_bk;
 
-	struct NanoLog
+	class NanoLog
 	{
+	public:
+        NanoLog(LogLevel level): m_level(level) {};
 		/*
 		* Ideally this should have been operator+=
 		* Could not get that to compile, so here we are...
 		*/
 		bool operator==(NanoLogLine & logline)
 		{
-            switch(logline.get_level())
+            switch(m_level)
             {
             case LogLevel::ADS:
+                std::cout<<"[LogLevel] call LogLevel::ADS"<<std::endl;
                 atomic_nanologger_ads.load(std::memory_order_acquire)->add(std::move(logline));
                 break;
             case LogLevel::BACK:
@@ -696,6 +698,8 @@ namespace nanolog
             }
 			return true;
 		}
+    private:
+        LogLevel m_level;
 	};
 
 	inline std::atomic < unsigned int > loglevel = { 0 };
@@ -789,7 +793,7 @@ namespace nanolog
 	}
 } // namespace nanolog
 
-#define NANO_LOG(LEVEL) nanolog::NanoLog() == nanolog::NanoLogLine(LEVEL, __FILE__, __func__, __LINE__)
+#define NANO_LOG(LEVEL) nanolog::NanoLog(LEVEL) == nanolog::NanoLogLine(LEVEL, __FILE__, __func__, __LINE__)
 //#define LOG_NANO_INFO nanolog::is_logged(nanolog::LogLevel::INFO) && NANO_LOG(nanolog::LogLevel::INFO)
 //#define LOG_NANO_WARN nanolog::is_logged(nanolog::LogLevel::WARN) && NANO_LOG(nanolog::LogLevel::WARN)
 //#define LOG_NANO_CRIT nanolog::is_logged(nanolog::LogLevel::CRIT) && NANO_LOG(nanolog::LogLevel::CRIT)
