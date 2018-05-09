@@ -115,9 +115,10 @@ namespace nanolog
 	class NanoLogLine
 	{
 	public:
+        //LogLevel m_level;
 		typedef std::tuple < char, uint32_t, uint64_t, int32_t, int64_t, double, const char*, char * > SupportedTypes;
 		NanoLogLine(LogLevel level, char const * file, char const * function, uint32_t line) : m_bytes_used(0)
-			, m_buffer_size(sizeof(m_stack_buffer))
+			, m_buffer_size(sizeof(m_stack_buffer)) //, m_level(level)
 		{
 			encode0(timestamp_now(), this_thread_id(), file, function, line, level);
 		}
@@ -126,6 +127,12 @@ namespace nanolog
 
 		NanoLogLine(NanoLogLine &&) = default;
 		NanoLogLine& operator=(NanoLogLine &&) = default;
+
+		LogLevel get_level()
+		{
+            char * b = !m_heap_buffer ? m_stack_buffer : m_heap_buffer.get();
+            return *reinterpret_cast <LogLevel *>(b);
+		}
 
 		void stringify(std::ostream & os)
 		{
@@ -662,7 +669,9 @@ namespace nanolog
 	inline std::unique_ptr < NanoLogger > nanologger_ads;
     inline std::unique_ptr < NanoLogger > nanologger_bk;
 
-	inline std::atomic < NanoLogger * > atomic_nanologger;
+	inline std::atomic < NanoLogger * > atomic_nanologger_info;
+	inline std::atomic < NanoLogger * > atomic_nanologger_ads;
+	inline std::atomic < NanoLogger * > atomic_nanologger_bk;
 
 	struct NanoLog
 	{
@@ -672,7 +681,19 @@ namespace nanolog
 		*/
 		bool operator==(NanoLogLine & logline)
 		{
-			atomic_nanologger.load(std::memory_order_acquire)->add(std::move(logline));
+            switch(logline.get_level())
+            {
+            case LogLevel::ADS:
+                atomic_nanologger_ads.load(std::memory_order_acquire)->add(std::move(logline));
+                break;
+            case LogLevel::BACK:
+                atomic_nanologger_bk.load(std::memory_order_acquire)->add(std::move(logline));
+                break;
+            case LogLevel::INFO:
+            case LogLevel::WARN:
+            case LogLevel::CRIT:
+                atomic_nanologger_info.load(std::memory_order_acquire)->add(std::move(logline));
+            }
 			return true;
 		}
 	};
@@ -712,13 +733,13 @@ namespace nanolog
         case LogLevel::ADS:
             {
                 nanologger_ads.reset(new NanoLogger(ngl, log_directory, log_file_name, log_file_roll_size_mb));
-                atomic_nanologger.store(nanologger_ads.get(), std::memory_order_seq_cst);
+                atomic_nanologger_ads.store(nanologger_ads.get(), std::memory_order_seq_cst);
                 break;
             }
         case LogLevel::BACK:
             {
                 nanologger_bk.reset(new NanoLogger(ngl, log_directory, log_file_name, log_file_roll_size_mb));
-                atomic_nanologger.store(nanologger_bk.get(), std::memory_order_seq_cst);
+                atomic_nanologger_bk.store(nanologger_bk.get(), std::memory_order_seq_cst);
                 break;
             }
         case LogLevel::INFO:
@@ -726,7 +747,7 @@ namespace nanolog
         case LogLevel::CRIT:
             {
                 nanologger_info.reset(new NanoLogger(ngl, log_directory, log_file_name, log_file_roll_size_mb));
-                atomic_nanologger.store(nanologger_info.get(), std::memory_order_seq_cst);
+                atomic_nanologger_info.store(nanologger_info.get(), std::memory_order_seq_cst);
                 break;
             }
         default:
@@ -743,13 +764,13 @@ namespace nanolog
         case LogLevel::ADS:
             {
                 nanologger_ads.reset(new NanoLogger(gl, log_directory, log_file_name, log_file_roll_size_mb));
-                atomic_nanologger.store(nanologger_ads.get(), std::memory_order_seq_cst);
+                atomic_nanologger_ads.store(nanologger_ads.get(), std::memory_order_seq_cst);
                 break;
             }
         case LogLevel::BACK:
             {
                 nanologger_bk.reset(new NanoLogger(gl, log_directory, log_file_name, log_file_roll_size_mb));
-                atomic_nanologger.store(nanologger_bk.get(), std::memory_order_seq_cst);
+                atomic_nanologger_bk.store(nanologger_bk.get(), std::memory_order_seq_cst);
                 break;
             }
         case LogLevel::INFO:
@@ -757,7 +778,7 @@ namespace nanolog
         case LogLevel::CRIT:
             {
                 nanologger_info.reset(new NanoLogger(gl, log_directory, log_file_name, log_file_roll_size_mb));
-                atomic_nanologger.store(nanologger_info.get(), std::memory_order_seq_cst);
+                atomic_nanologger_info.store(nanologger_info.get(), std::memory_order_seq_cst);
                 break;
             }
         default:
