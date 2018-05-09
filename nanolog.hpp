@@ -17,7 +17,7 @@
 
 namespace nanolog
 {
-	enum class LogLevel : uint8_t { INFO, WARN, CRIT };
+	enum class LogLevel : uint8_t { INFO, ADS, BACK, WARN, CRIT };
 
 	/*
 	* Non guaranteed logging. Uses a ring buffer to hold log lines.
@@ -58,7 +58,7 @@ namespace nanolog
 			//auto const msecs = diff % 1000;
 
 			std::time_t t = std::chrono::system_clock::to_time_t(n);
-			os << '[' << std::put_time(std::localtime(&t), "%Y-%m-%d %H.%M.%S") << "." << diff << ']';
+			os << '`' << std::put_time(std::localtime(&t), "%Y-%m-%d %H.%M.%S") << "." << diff << '`';
 		}
 
 		std::thread::id this_thread_id()
@@ -104,6 +104,10 @@ namespace nanolog
 			return "WARN";
 		case LogLevel::CRIT:
 			return "CRIT";
+		case LogLevel::ADS:
+			return "ADS";
+		case LogLevel::BACK:
+			return "BACK";
 		}
 		return "XXXX";
 	}
@@ -136,16 +140,15 @@ namespace nanolog
 
 			format_timestamp(os, timestamp);
 
-			os << '[' << to_string(loglevel) << ']'
-				<< '[' << threadid << ']'
-				<< '[' << file << ':' << function << ':' << line << "] ";
+			os << '`' << threadid;
 
 			stringify(os, b, end);
 
 			os << std::endl;
 
-			if (loglevel >= LogLevel::CRIT)
+			if (loglevel >= LogLevel::INFO){
 				os.flush();
+			}
 		}
 
 		template < typename Arg >
@@ -562,14 +565,20 @@ namespace nanolog
 				m_os->close();
 			}
 
+			auto n = std::chrono::system_clock::now();
+			auto m = n.time_since_epoch();
+			auto diff = std::chrono::duration_cast<std::chrono::milliseconds>(m).count();
+			//auto const msecs = diff % 1000;
+			std::time_t t = std::chrono::system_clock::to_time_t(n);
+
 			m_bytes_written = 0;
 			m_os.reset(new std::ofstream());
-			// TODO Optimize this part. Does it even matter ?
-			std::string log_file_name = m_name;
-			log_file_name.append(".");
-			log_file_name.append(std::to_string(++m_file_number));
-			log_file_name.append(".txt");
-			m_os->open(log_file_name, std::ofstream::out | std::ofstream::trunc);
+			std::stringstream log_file_name;
+			log_file_name << m_name
+                << "_"<< std::put_time(std::localtime(&t), "%Y-%m-%d_%H")
+                << "_"<< std::to_string(++m_file_number)
+                << ".txt";
+			m_os->open(log_file_name.str(), std::ofstream::out | std::ofstream::trunc);
 		}
 
 	private:
@@ -649,7 +658,9 @@ namespace nanolog
 		std::thread m_thread;
 	};
 
-	inline std::unique_ptr < NanoLogger > nanologger;
+	inline std::unique_ptr < NanoLogger > nanologger_info;
+	inline std::unique_ptr < NanoLogger > nanologger_ads;
+    inline std::unique_ptr < NanoLogger > nanologger_bk;
 
 	inline std::atomic < NanoLogger * > atomic_nanologger;
 
@@ -694,20 +705,70 @@ namespace nanolog
 	*/
 	//	void initialize(GuaranteedLogger gl, std::string const & log_directory, std::string const & log_file_name, uint32_t log_file_roll_size_mb);
 	//	void initialize(NonGuaranteedLogger ngl, std::string const & log_directory, std::string const & log_file_name, uint32_t log_file_roll_size_mb);
-	inline void initialize(NonGuaranteedLogger ngl, std::string const & log_directory, std::string const & log_file_name, uint32_t log_file_roll_size_mb)
+	inline void initialize(NonGuaranteedLogger ngl, LogLevel level, std::string const & log_directory, std::string const & log_file_name, uint32_t log_file_roll_size_mb)
 	{
-		nanologger.reset(new NanoLogger(ngl, log_directory, log_file_name, log_file_roll_size_mb));
-		atomic_nanologger.store(nanologger.get(), std::memory_order_seq_cst);
+        switch(level)
+        {
+        case LogLevel::ADS:
+            {
+                nanologger_ads.reset(new NanoLogger(ngl, log_directory, log_file_name, log_file_roll_size_mb));
+                atomic_nanologger.store(nanologger_ads.get(), std::memory_order_seq_cst);
+                break;
+            }
+        case LogLevel::BACK:
+            {
+                nanologger_bk.reset(new NanoLogger(ngl, log_directory, log_file_name, log_file_roll_size_mb));
+                atomic_nanologger.store(nanologger_bk.get(), std::memory_order_seq_cst);
+                break;
+            }
+        case LogLevel::INFO:
+        case LogLevel::WARN:
+        case LogLevel::CRIT:
+            {
+                nanologger_info.reset(new NanoLogger(ngl, log_directory, log_file_name, log_file_roll_size_mb));
+                atomic_nanologger.store(nanologger_info.get(), std::memory_order_seq_cst);
+                break;
+            }
+        default:
+            {
+
+            }
+        }
 	}
 
-	inline void initialize(GuaranteedLogger gl, std::string const & log_directory, std::string const & log_file_name, uint32_t log_file_roll_size_mb)
+	inline void initialize(GuaranteedLogger gl, LogLevel level, std::string const & log_directory, std::string const & log_file_name, uint32_t log_file_roll_size_mb)
 	{
-		nanologger.reset(new NanoLogger(gl, log_directory, log_file_name, log_file_roll_size_mb));
-		atomic_nanologger.store(nanologger.get(), std::memory_order_seq_cst);
+        switch(level)
+        {
+        case LogLevel::ADS:
+            {
+                nanologger_ads.reset(new NanoLogger(gl, log_directory, log_file_name, log_file_roll_size_mb));
+                atomic_nanologger.store(nanologger_ads.get(), std::memory_order_seq_cst);
+                break;
+            }
+        case LogLevel::BACK:
+            {
+                nanologger_bk.reset(new NanoLogger(gl, log_directory, log_file_name, log_file_roll_size_mb));
+                atomic_nanologger.store(nanologger_bk.get(), std::memory_order_seq_cst);
+                break;
+            }
+        case LogLevel::INFO:
+        case LogLevel::WARN:
+        case LogLevel::CRIT:
+            {
+                nanologger_info.reset(new NanoLogger(gl, log_directory, log_file_name, log_file_roll_size_mb));
+                atomic_nanologger.store(nanologger_info.get(), std::memory_order_seq_cst);
+                break;
+            }
+        default:
+            {
+
+            }
+        }
 	}
 } // namespace nanolog
 
 #define NANO_LOG(LEVEL) nanolog::NanoLog() == nanolog::NanoLogLine(LEVEL, __FILE__, __func__, __LINE__)
-#define LOG_INFO nanolog::is_logged(nanolog::LogLevel::INFO) && NANO_LOG(nanolog::LogLevel::INFO)
-#define LOG_WARN nanolog::is_logged(nanolog::LogLevel::WARN) && NANO_LOG(nanolog::LogLevel::WARN)
-#define LOG_CRIT nanolog::is_logged(nanolog::LogLevel::CRIT) && NANO_LOG(nanolog::LogLevel::CRIT)
+//#define LOG_NANO_INFO nanolog::is_logged(nanolog::LogLevel::INFO) && NANO_LOG(nanolog::LogLevel::INFO)
+//#define LOG_NANO_WARN nanolog::is_logged(nanolog::LogLevel::WARN) && NANO_LOG(nanolog::LogLevel::WARN)
+//#define LOG_NANO_CRIT nanolog::is_logged(nanolog::LogLevel::CRIT) && NANO_LOG(nanolog::LogLevel::CRIT)
