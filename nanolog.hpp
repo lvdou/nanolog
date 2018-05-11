@@ -18,6 +18,7 @@
 namespace nanolog
 {
 	enum class LogLevel : uint8_t { INFO, ADS, BACK, WARN, CRIT };
+	enum class RollType : uint8_t { SIZE, TIME, DURING };
 
 	/*
 	* Non guaranteed logging. Uses a ring buffer to hold log lines.
@@ -53,12 +54,12 @@ namespace nanolog
 		void format_timestamp(std::ostream & os, uint64_t timestamp)
 		{
 			auto n = std::chrono::system_clock::now();
-			auto m = n.time_since_epoch();
-			auto diff = std::chrono::duration_cast<std::chrono::milliseconds>(m).count();
+			//auto m = n.time_since_epoch();
+			//auto diff = std::chrono::duration_cast<std::chrono::milliseconds>(m).count();
 			//auto const msecs = diff % 1000;
 
 			std::time_t t = std::chrono::system_clock::to_time_t(n);
-			os << std::put_time(std::localtime(&t), "%Y-%m-%d %H.%M.%S") << "." << diff << '`';
+			os << std::put_time(std::localtime(&t), "%Y-%m-%d %H:%M:%S");
 		}
 
 		std::thread::id this_thread_id()
@@ -146,15 +147,70 @@ namespace nanolog
 
 			format_timestamp(os, timestamp);
 
-			os << '`' << threadid;
+			os << "`" << threadid << "`";
+
+            switch (loglevel)
+            {
+            case LogLevel::INFO:
+                os << "`info`";
+                break;
+            case LogLevel::WARN:
+                os << "`warn`";
+                break;
+            case LogLevel::CRIT:
+                os << "`crit`";
+                break;
+            case LogLevel::ADS:
+                os << "`ads`";
+                break;
+            case LogLevel::BACK:
+                os << "`bk`";
+                break;
+            default:
+                os << "`info`";
+            }
 
 			stringify(os, b, end);
 
-			os << std::endl;
+			os << "`" <<std::endl;
 
 			if (loglevel >= LogLevel::INFO){
 				os.flush();
 			}
+		}
+
+        template< class CharT, class Traits = std::char_traits<CharT>, class Allocator = std::allocator<CharT> >
+		NanoLogLine& operator<<(std::basic_string<CharT, Traits, Allocator>& str)
+		{
+            //std::string v_string{};
+            //v_string << os;
+            encode_c_string(str.c_str());
+			return *this;
+		}
+        template< class CharT, class Traits = std::char_traits<CharT>, class Allocator = std::allocator<CharT> >
+		NanoLogLine& operator<<(const std::basic_string<CharT, Traits, Allocator>& str)
+		{
+            //std::string v_string{};
+            //v_string << os;
+            encode_c_string(str.c_str());
+			return *this;
+		}
+
+        template <class CharT, class Traits>
+		NanoLogLine& operator<<(std::basic_ostream<CharT, Traits>& os)
+		{
+            std::string v_string{};
+            v_string << os;
+            encode_c_string(v_string.c_str());
+			return *this;
+		}
+        template <class CharT, class Traits>
+		NanoLogLine& operator<<(const std::basic_ostream<CharT, Traits>& os)
+		{
+            std::string v_string{};
+            v_string << os;
+            encode_c_string(v_string.c_str());
+			return *this;
 		}
 
 		template < typename Arg >
@@ -544,10 +600,20 @@ namespace nanolog
 	class FileWriter
 	{
 	public:
+		FileWriter(std::string const & log_directory, std::string const & log_file_name)
+			: m_log_file_roll_size_bytes(0)
+			, m_name(log_directory + log_file_name)
+		{
+            m_roll_type = RollType::TIME;
+            reset_roll_time();
+			roll_file();
+		}
+
 		FileWriter(std::string const & log_directory, std::string const & log_file_name, uint32_t log_file_roll_size_mb)
 			: m_log_file_roll_size_bytes(log_file_roll_size_mb * 1024 * 1024)
 			, m_name(log_directory + log_file_name)
 		{
+            m_roll_type = RollType::SIZE;
 			roll_file();
 		}
 
@@ -556,13 +622,47 @@ namespace nanolog
 			auto pos = m_os->tellp();
 			logline.stringify(*m_os);
 			m_bytes_written += m_os->tellp() - pos;
-			if (m_bytes_written > m_log_file_roll_size_bytes)
+
+			switch(m_roll_type)
 			{
-				roll_file();
+			case RollType::SIZE:
+                if( check_roll_by_size() ){
+                    roll_file();
+            	}
+                break;
+			case RollType::TIME:
+                if( check_roll_by_time() ){
+                    roll_file();
+            	}
+                break;
+			case RollType::DURING:
+                if( check_roll_by_duing() ){
+                    roll_file();
+            	}
+                break;
 			}
 		}
 
 	private:
+        void reset_roll_time()
+        {
+            auto tp = std::chrono::system_clock::now();
+            tp +=  std::chrono::hours(24);
+            auto tt = std::chrono::system_clock::to_time_t(tp);
+            //LOGGER_DEBUG<<"localtime after 24 hours: "<<std::put_time(std::localtime(&tt), "%F %T");
+
+            std::tm* now = std::gmtime(&tt);
+            now->tm_hour = 0;
+            now->tm_min = 0;
+            now->tm_sec = 0;
+            std::time_t tt_then = mktime(now);
+            //LOGGER_DEBUG<<"timetThen: "<<std::put_time(std::localtime(&timetThen), "%F %T");
+            m_roll_time = std::chrono::system_clock::from_time_t(tt_then);
+
+            //auto tt_then = std::chrono::system_clock::to_time_t(tp_then);
+            //LOGGER_DEBUG<<"localtime tt_then: "<<std::put_time(std::localtime(&tt_then), "%F %T");
+        }
+
 		void roll_file()
 		{
 			if (m_os)
@@ -581,13 +681,43 @@ namespace nanolog
 			m_os.reset(new std::ofstream());
 			std::stringstream log_file_name;
 			log_file_name << m_name
-                << "_"<< std::put_time(std::localtime(&t), "%Y-%m-%d_%H")
+                << "_"<< std::put_time(std::localtime(&t), "%Y-%m-%d_%H-%M-%S")
                 << "_"<< std::to_string(++m_file_number)
                 << ".txt";
 			m_os->open(log_file_name.str(), std::ofstream::out | std::ofstream::trunc);
 		}
 
+        bool check_roll_by_size()
+		{
+			if (m_bytes_written > m_log_file_roll_size_bytes)
+			{
+				return true;
+			}
+            return false;
+		}
+
+        bool check_roll_by_time()
+		{
+			auto n = std::chrono::system_clock::now();
+			if(n>m_roll_time){
+                return true;
+			}
+            return false;
+		}
+
+        bool check_roll_by_duing()
+		{
+			auto n = std::chrono::system_clock::now();
+			if(n>m_roll_time){
+                return true;
+			}
+            return false;
+		}
+
 	private:
+	    RollType m_roll_type = RollType::SIZE;
+        std::chrono::duration<int, std::centi> m_roll_duration;
+        std::chrono::time_point<std::chrono::system_clock> m_roll_time;
 		uint32_t m_file_number = 0;
 		std::streamoff m_bytes_written = 0;
 		uint32_t const m_log_file_roll_size_bytes;
@@ -611,6 +741,24 @@ namespace nanolog
 			: m_state(State::INIT)
 			, m_buffer_base(new QueueBuffer())
 			, m_file_writer(log_directory, log_file_name, std::max(1u, log_file_roll_size_mb))
+			, m_thread(&NanoLogger::pop, this)
+		{
+			m_state.store(State::READY, std::memory_order_release);
+		}
+
+        NanoLogger(NonGuaranteedLogger ngl, std::string const & log_directory, std::string const & log_file_name)
+			: m_state(State::INIT)
+			, m_buffer_base(new RingBuffer(std::max(1u, ngl.ring_buffer_size_mb) * 1024 * 4))
+			, m_file_writer(log_directory, log_file_name)
+			, m_thread(&NanoLogger::pop, this)
+		{
+			m_state.store(State::READY, std::memory_order_release);
+		}
+
+		NanoLogger(GuaranteedLogger gl, std::string const & log_directory, std::string const & log_file_name)
+			: m_state(State::INIT)
+			, m_buffer_base(new QueueBuffer())
+			, m_file_writer(log_directory, log_file_name)
 			, m_thread(&NanoLogger::pop, this)
 		{
 			m_state.store(State::READY, std::memory_order_release);
@@ -782,6 +930,68 @@ namespace nanolog
         case LogLevel::CRIT:
             {
                 nanologger_info.reset(new NanoLogger(gl, log_directory, log_file_name, log_file_roll_size_mb));
+                atomic_nanologger_info.store(nanologger_info.get(), std::memory_order_seq_cst);
+                break;
+            }
+        default:
+            {
+
+            }
+        }
+	}
+
+    inline void initialize(NonGuaranteedLogger ngl, LogLevel level, std::string const & log_directory, std::string const & log_file_name)
+	{
+        switch(level)
+        {
+        case LogLevel::ADS:
+            {
+                nanologger_ads.reset(new NanoLogger(ngl, log_directory, log_file_name));
+                atomic_nanologger_ads.store(nanologger_ads.get(), std::memory_order_seq_cst);
+                break;
+            }
+        case LogLevel::BACK:
+            {
+                nanologger_bk.reset(new NanoLogger(ngl, log_directory, log_file_name));
+                atomic_nanologger_bk.store(nanologger_bk.get(), std::memory_order_seq_cst);
+                break;
+            }
+        case LogLevel::INFO:
+        case LogLevel::WARN:
+        case LogLevel::CRIT:
+            {
+                nanologger_info.reset(new NanoLogger(ngl, log_directory, log_file_name));
+                atomic_nanologger_info.store(nanologger_info.get(), std::memory_order_seq_cst);
+                break;
+            }
+        default:
+            {
+
+            }
+        }
+	}
+
+	inline void initialize(GuaranteedLogger gl, LogLevel level, std::string const & log_directory, std::string const & log_file_name)
+	{
+        switch(level)
+        {
+        case LogLevel::ADS:
+            {
+                nanologger_ads.reset(new NanoLogger(gl, log_directory, log_file_name));
+                atomic_nanologger_ads.store(nanologger_ads.get(), std::memory_order_seq_cst);
+                break;
+            }
+        case LogLevel::BACK:
+            {
+                nanologger_bk.reset(new NanoLogger(gl, log_directory, log_file_name));
+                atomic_nanologger_bk.store(nanologger_bk.get(), std::memory_order_seq_cst);
+                break;
+            }
+        case LogLevel::INFO:
+        case LogLevel::WARN:
+        case LogLevel::CRIT:
+            {
+                nanologger_info.reset(new NanoLogger(gl, log_directory, log_file_name));
                 atomic_nanologger_info.store(nanologger_info.get(), std::memory_order_seq_cst);
                 break;
             }
