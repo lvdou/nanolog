@@ -632,11 +632,13 @@ namespace nanolog
                 break;
 			case RollType::TIME:
                 if( check_roll_by_time() ){
+                    reset_roll_time();
                     roll_file();
             	}
                 break;
 			case RollType::DURING:
                 if( check_roll_by_duing() ){
+                    reset_roll_time();
                     roll_file();
             	}
                 break;
