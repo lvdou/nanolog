@@ -19,6 +19,7 @@ namespace nanolog
 {
 	enum class LogLevel : uint8_t { INFO, ADS, BACK, WARN, CRIT };
 	enum class RollType : uint8_t { SIZE, TIME, DURING };
+	static std::mutex m_roll_mutex;
 
 	/*
 	* Non guaranteed logging. Uses a ring buffer to hold log lines.
@@ -649,20 +650,29 @@ namespace nanolog
         void reset_roll_time()
         {
             auto tp = std::chrono::system_clock::now();
+            //auto tt = std::chrono::system_clock::to_time_t(tp);
+            //std::tm* tm_now = std::localtime(&tt);
+            //std::cout<<"[reset] tm_now: " <<tm_now->tm_yday<<", "<<tm_now->tm_wday<<", "<<tm_now->tm_yday<<", "<<tm_now->tm_year<<", "<<tm_now->tm_mon<<", "<<tm_now->tm_mday<<", "<<tm_now->tm_hour<<", "<<tm_now->tm_min<<", "<<tm_now->tm_sec<<", " <<std::endl;
             tp +=  std::chrono::hours(24);
             auto tt = std::chrono::system_clock::to_time_t(tp);
-            //LOGGER_DEBUG<<"localtime after 24 hours: "<<std::put_time(std::localtime(&tt), "%F %T");
+            std::tm* tm_now = std::localtime(&tt);
+            //std::cout<<"[reset] before tm_tommorow_now: " <<tm_now->tm_yday<<", "<<tm_now->tm_wday<<", "<<tm_now->tm_yday<<", "<<tm_now->tm_year<<", "<<tm_now->tm_mon<<", "<<tm_now->tm_mday<<", "<<tm_now->tm_hour<<", "<<tm_now->tm_min<<", "<<tm_now->tm_sec<<", " <<std::endl;
+            //std::cout<<"[reset] localtime tommorow now: "<<std::put_time(std::localtime(&tt), "%F %T")<<std::endl;
 
-            std::tm* now = std::gmtime(&tt);
-            now->tm_hour = 0;
-            now->tm_min = 0;
-            now->tm_sec = 0;
-            std::time_t tt_then = mktime(now);
-            //LOGGER_DEBUG<<"timetThen: "<<std::put_time(std::localtime(&timetThen), "%F %T");
+            //std::tm* now = std::localtime(&tt);
+            //std::cout<<"[reset] before now: " <<tm_now->tm_yday<<", "<<tm_now->tm_wday<<", "<<tm_now->tm_yday<<", "<<tm_now->tm_year<<", "<<tm_now->tm_mon<<", "<<tm_now->tm_mday<<", "<<tm_now->tm_hour<<", "<<tm_now->tm_min<<", "<<tm_now->tm_sec<<", " <<std::endl;
+            tm_now->tm_hour = 0;
+            tm_now->tm_min = 0;
+            tm_now->tm_sec = 0;
+            //std::cout<<"[reset] after now: " <<tm_now->tm_yday<<", "<<tm_now->tm_wday<<", "<<tm_now->tm_yday<<", "<<tm_now->tm_year<<", "<<tm_now->tm_mon<<", "<<tm_now->tm_mday<<", "<<tm_now->tm_hour<<", "<<tm_now->tm_min<<", "<<tm_now->tm_sec<<", " <<std::endl;
+            std::time_t tt_then = mktime(tm_now);
+            //tm_now = std::localtime(&tt_then);
+            //std::cout<<"[reset] after tm tommorow: " <<tm_now->tm_yday<<", "<<tm_now->tm_wday<<", "<<tm_now->tm_yday<<", "<<tm_now->tm_year<<", "<<tm_now->tm_mon<<", "<<tm_now->tm_mday<<", "<<tm_now->tm_hour<<", "<<tm_now->tm_min<<", "<<tm_now->tm_sec<<", " <<std::endl;
+            //std::cout<<"[reset] localtime tommorow: "<<std::put_time(std::localtime(&tt_then), "%F %T")<<std::endl;
             m_roll_time = std::chrono::system_clock::from_time_t(tt_then);
 
-            //auto tt_then = std::chrono::system_clock::to_time_t(tp_then);
-            //LOGGER_DEBUG<<"localtime tt_then: "<<std::put_time(std::localtime(&tt_then), "%F %T");
+            tt = std::chrono::system_clock::to_time_t(m_roll_time);
+            //std::cout<<"[reset] localtime m_roll_time: "<<std::put_time(std::localtime(&tt), "%F %T")<<std::endl;
         }
 
 		void roll_file()
@@ -687,23 +697,42 @@ namespace nanolog
                 << "_"<< std::to_string(++m_file_number)
                 << ".txt";
 			m_os->open(log_file_name.str(), std::ofstream::out | std::ofstream::trunc);
+			m_is_rolling.store(false);
 		}
 
         bool check_roll_by_size()
 		{
 			if (m_bytes_written > m_log_file_roll_size_bytes)
 			{
+                std::lock_guard<std::mutex> lock(m_roll_mutex);
+                if(m_is_rolling.load()==true){
+                    return false;
+                }
+                m_is_rolling.store(true,std::memory_order_seq_cst);
+                //std::cout<<"check_roll_by_size: true"<<std::endl;
 				return true;
 			}
+			//std::cout<<"check_roll_by_size: false"<<std::endl;
             return false;
 		}
 
         bool check_roll_by_time()
 		{
 			auto n = std::chrono::system_clock::now();
+			//auto tt = std::chrono::system_clock::to_time_t(n);
+            //std::cout<<"localtime now: "<<std::put_time(std::localtime(&tt), "%F %T")<<std::endl;
+            //tt = std::chrono::system_clock::to_time_t(m_roll_time);
+            //std::cout<<"m_roll_time: "<<std::put_time(std::localtime(&tt), "%F %T")<<std::endl;
 			if(n>m_roll_time){
+                std::lock_guard<std::mutex> lock(m_roll_mutex);
+                if(m_is_rolling.load()==true){
+                    return false;
+                }
+                m_is_rolling.store(true,std::memory_order_seq_cst);
+                //std::cout<<"check_roll_by_time: true"<<std::endl;
                 return true;
 			}
+			//std::cout<<"check_roll_by_time: false"<<std::endl;
             return false;
 		}
 
@@ -711,6 +740,11 @@ namespace nanolog
 		{
 			auto n = std::chrono::system_clock::now();
 			if(n>m_roll_time){
+                std::lock_guard<std::mutex> lock(m_roll_mutex);
+                if(m_is_rolling.load()==true){
+                    return false;
+                }
+                m_is_rolling.store(true,std::memory_order_seq_cst);
                 return true;
 			}
             return false;
@@ -718,6 +752,8 @@ namespace nanolog
 
 	private:
 	    RollType m_roll_type = RollType::SIZE;
+	    //static std::mutex m_roll_mutex;
+	    std::atomic<bool> m_is_rolling;
         std::chrono::duration<int, std::centi> m_roll_duration;
         std::chrono::time_point<std::chrono::system_clock> m_roll_time;
 		uint32_t m_file_number = 0;
@@ -835,7 +871,7 @@ namespace nanolog
             switch(m_level)
             {
             case LogLevel::ADS:
-                std::cout<<"[LogLevel] call LogLevel::ADS"<<std::endl;
+                //std::cout<<"[LogLevel] call LogLevel::ADS"<<std::endl;
                 atomic_nanologger_ads.load(std::memory_order_acquire)->add(std::move(logline));
                 break;
             case LogLevel::BACK:
